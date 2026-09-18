@@ -25,11 +25,6 @@ worker-configuration.d.ts
 .env.*
 !.env.example
 
-# content-migration working data (real content never belongs in git)
-tools/content-migration/workspace/**
-!tools/content-migration/workspace/**/.gitkeep
-tools/content-migration/rules.json
-
 # Editor / OS
 .vscode/
 .idea/

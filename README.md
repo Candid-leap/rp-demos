@@ -1,6 +1,6 @@
 # Reverse-Proxy Site Migration — Reference Implementations
 
-**Two production reverse proxies that let a live website be replatformed one page at a time, with zero downtime and instant rollback — plus the tooling that goes with them.**
+**Two production reverse proxies that let a live website be replatformed one page at a time, with zero downtime and instant rollback.**
 
 This repository is a sanitised, self-contained extract of two real migrations we ran. Both shipped, both carried live commercial traffic, and both are included here in full source so the technique can be reviewed rather than described.
 
@@ -20,11 +20,10 @@ The platform in this code is Cloudflare Workers, because that is where these two
 8. [How a migration actually runs](#how-a-migration-actually-runs)
 9. [Verification scripts](#verification-scripts)
 10. [Infrastructure as code](#infrastructure-as-code)
-11. [Content and asset migration](#content-and-asset-migration)
-12. [Running this somewhere else](#running-this-somewhere-else)
-13. [Lineage and credits](#lineage-and-credits)
-14. [Local development](#local-development)
-15. [About this copy](#about-this-copy)
+11. [Running this somewhere else](#running-this-somewhere-else)
+12. [Lineage and credits](#lineage-and-credits)
+13. [Local development](#local-development)
+14. [About this copy](#about-this-copy)
 
 ---
 
@@ -154,38 +153,32 @@ That last flip is the one-way door, and by the time you reach it every page on t
 
 ```
 .
-├── apps/
-│   ├── proxy-dual-origin/        Generation 1 — two fixed origins, Terraform-managed
-│   │   ├── src/
-│   │   │   ├── index.ts          Request pipeline
-│   │   │   ├── constants.ts      ◀ THE ROUTING TABLE
-│   │   │   ├── helpers.ts        Route matching, origin fetch, redirect rewriting
-│   │   │   └── context.ts        Env bindings
-│   │   ├── terraform/            Worker, routes, DNS and redirect rules as code
-│   │   ├── scripts/
-│   │   │   └── ssl-check.sh      Per-edge-IP TLS verification
-│   │   └── wrangler.jsonc
-│   │
-│   └── proxy-multi-origin/       Generation 2 — N origins, absorbed security + analytics
-│       ├── src/
-│       │   ├── index.ts          Request pipeline
-│       │   ├── config.ts         ◀ THE ROUTING TABLE (+ CSP, toggles)
-│       │   ├── origins.ts        Origin key → URL mapping
-│       │   ├── helpers.ts        Route matching, origin fetch, redirect rewriting
-│       │   ├── security.ts       CSP assembly, TLS floor, header stamping
-│       │   └── analytics.ts      Page-view logging
-│       ├── scripts/
-│       │   ├── site-audit.sh     Read-only pre-flight audit of the live site
-│       │   ├── rehearsal-verify.sh
-│       │   ├── golive-verify.sh  Post-cutover verification
-│       │   └── build.sh
-│       └── wrangler.jsonc        dev / staging / rehearsal / production
-│
-└── tools/
-    └── content-migration/        CSV-driven content + asset migration, with review portal
-        ├── src/stages/           ingest → precheck → plan → migrate → verify → export
-        ├── portal/               Local browser UI for human review of every change
-        └── rules.example.json    Declarative URL-rewrite / asset-rehost rules
+└── apps/
+    ├── proxy-dual-origin/        Generation 1 — two fixed origins, Terraform-managed
+    │   ├── src/
+    │   │   ├── index.ts          Request pipeline
+    │   │   ├── constants.ts      ◀ THE ROUTING TABLE
+    │   │   ├── helpers.ts        Route matching, origin fetch, redirect rewriting
+    │   │   └── context.ts        Env bindings
+    │   ├── terraform/            Worker, routes, DNS and redirect rules as code
+    │   ├── scripts/
+    │   │   └── ssl-check.sh      Per-edge-IP TLS verification
+    │   └── wrangler.jsonc
+    │
+    └── proxy-multi-origin/       Generation 2 — N origins, absorbed security + analytics
+        ├── src/
+        │   ├── index.ts          Request pipeline
+        │   ├── config.ts         ◀ THE ROUTING TABLE (+ CSP, toggles)
+        │   ├── origins.ts        Origin key → URL mapping
+        │   ├── helpers.ts        Route matching, origin fetch, redirect rewriting
+        │   ├── security.ts       CSP assembly, TLS floor, header stamping
+        │   └── analytics.ts      Page-view logging
+        ├── scripts/
+        │   ├── site-audit.sh     Read-only pre-flight audit of the live site
+        │   ├── rehearsal-verify.sh
+        │   ├── golive-verify.sh  Post-cutover verification
+        │   └── build.sh
+        └── wrangler.jsonc        dev / staging / rehearsal / production
 ```
 
 ## The two implementations
@@ -346,24 +339,6 @@ Each script is read-only — GET/HEAD requests and DNS lookups only — and writ
 
 Worth noting: the Terraform deploys a *committed* build artefact, so `pnpm build` and commit precede `terraform apply`. It is a real trade-off — reviewable, diffable, reproducible deploys, at the cost of a build step you must not forget. `proxy-multi-origin` took the other road (Git-connected dashboard deploys, source built by the platform) and is simpler for it. Which is right depends on whether the client needs the infrastructure itself under review.
 
-## Content and asset migration
-
-`tools/content-migration/` handles what the proxy cannot: content that still *points* at the old platform. Images, PDFs and links baked into thousands of CMS records — which keep the old platform alive long after its last page stops serving.
-
-A seven-stage pipeline over CSV exports:
-
-```
-ingest → precheck → plan → migrate → verify → export → pdf-redirects
-```
-
-- **Declarative rules** (`rules.example.json`) match URL patterns and either **rehost** (download the asset, upload to the new CMS, rewrite the reference) or **rewrite** (repoint a link). Each rule carries a `reasoning` field explaining why it exists — including which edge redirect rule it mirrors, and what breaks without it.
-- **Every change is reviewed by a human.** `pnpm portal` serves a local browser UI showing each proposed rewrite, grouped and filterable, before anything is written.
-- **Nothing is destructive.** Originals are preserved, a plan file records every decision, and the output is a new CSV to import — the source export is never modified.
-- **Orphans surface rather than resolve.** When a legacy URL has no equivalent on the new site, the tool flags it for a decision instead of guessing. Those decisions become their own rules, with reasoning attached.
-- **Verification is built in**: link checking, asset availability, Google index checks and PDF redirect generation for files that cannot be rehosted.
-
-The rules file shipped here is an illustrative example. Real ones are written against a specific export, and the tests in `src/rules.test.ts` cover the ordering traps that matter — `/hs-fs/hubfs/` containing `/hubfs/`, third-party assets that must not be mapped onto your own CDN, HTML-entity-encoded query strings, and URLs with parentheses in the filename.
-
 ## Running this somewhere else
 
 Nothing here depends on Cloudflare conceptually. The proxy needs four capabilities:
@@ -416,7 +391,7 @@ nginx or Caddy in front, the routing table expressed as `location` blocks or a s
 
 ### What ports and what does not
 
-**Ports unchanged:** the routing table and its resolution order; the phased rollout; redirect-`Location` rewriting; HTML-rewrite string handling; the internal-hostname noindex rules and the primary-host edge case; the `robots.txt` strategy; observability headers; the audit and verification scripts; the content-migration tool (it never touches the edge at all).
+**Ports unchanged:** the routing table and its resolution order; the phased rollout; redirect-`Location` rewriting; HTML-rewrite string handling; the internal-hostname noindex rules and the primary-host edge case; the `robots.txt` strategy; observability headers; and the audit and verification scripts.
 
 **Needs rework per platform:** loop avoidance (#1) — the most important thing to establish *first* on any new platform; compression handling (#5), since who decompresses what differs; cache-purge granularity; and the deployment/IaC layer.
 
@@ -445,22 +420,13 @@ pnpm check                      # typecheck
 
 Local dev is treated as an allowed host, so routing, redirects and header logic all exercise against whatever origins you point at. The TLS floor is skipped locally (there is no real handshake to inspect), and analytics stays silent unless `ANALYTICS_KEY` is set — which it should not be, locally.
 
-```bash
-# Content-migration tool
-cd tools/content-migration
-pnpm install
-cp .env.example .env
-pnpm test                       # 26 tests, no network
-pnpm portal                     # review UI on :4321
-```
-
 Deployment differs per app by design — `proxy-dual-origin` via `terraform apply` from a committed bundle, `proxy-multi-origin` via Git-connected dashboard deploys or `wrangler deploy --env <name>`. See [Infrastructure as code](#infrastructure-as-code).
 
 ## About this copy
 
 This repository is a clean extract of two client projects, prepared for external review. Both were merged into one monorepo so the two generations can be compared side by side.
 
-**What was removed:** client and personal identifiers; real domains, hostnames, account and zone IDs, API tokens and CDN portal IDs; project documentation, runbooks, decision logs, review notes, timelines and dated engineering commentary; real page inventories; the production CSP allowlist; committed build artefacts; and all working data from the content-migration tool. Git history was not carried over.
+**What was removed:** client and personal identifiers; real domains, hostnames, account and zone IDs, API tokens and CDN portal IDs; project documentation, runbooks, decision logs, review notes, timelines and dated engineering commentary; real page inventories; the production CSP allowlist; and committed build artefacts. Git history was not carried over.
 
 **What was kept:** all source, in full and unmodified in behaviour. Every hostname you see is a placeholder (`example.com`, `example.net`, `newsite.webflow.io`); every credential slot is empty or marked `REPLACE-WITH-…`. The routing tables and the example CSP are representative stand-ins that show the shape of the real thing. The engineering commentary in the code — which is where most of the reasoning lives — is intact.
 
