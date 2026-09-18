@@ -8,6 +8,8 @@ The platform in this code is Cloudflare Workers, because that is where these two
 
 ---
 
+
+
 ## Contents
 
 1. [The problem this solves](#the-problem-this-solves)
@@ -26,6 +28,8 @@ The platform in this code is Cloudflare Workers, because that is where these two
 14. [About this copy](#about-this-copy)
 
 ---
+
+
 
 ## The problem this solves
 
@@ -71,15 +75,17 @@ Put a small programmable layer in front of the domain. It sits between visitors 
 
 The consequences are the whole point:
 
-| | Big-bang cutover | Reverse proxy |
-|---|---|---|
-| **Unit of release** | The entire site | One URL |
-| **Time to first value** | After the last page | After the first page |
-| **Rollback** | DNS change, hours | Delete one line, redeploy, ~1–2 min |
-| **Blast radius of a mistake** | Every page | The one page you just moved |
-| **Rehearsable?** | No | Yes, end to end, on a domain you own |
-| **Both platforms live at once** | No | Yes, indefinitely |
-| **URL structure** | Must change or be redirected | Unchanged — same domain throughout |
+
+|                                 | Big-bang cutover             | Reverse proxy                        |
+| ------------------------------- | ---------------------------- | ------------------------------------ |
+| **Unit of release**             | The entire site              | One URL                              |
+| **Time to first value**         | After the last page          | After the first page                 |
+| **Rollback**                    | DNS change, hours            | Delete one line, redeploy, ~1–2 min  |
+| **Blast radius of a mistake**   | Every page                   | The one page you just moved          |
+| **Rehearsable?**                | No                           | Yes, end to end, on a domain you own |
+| **Both platforms live at once** | No                           | Yes, indefinitely                    |
+| **URL structure**               | Must change or be redirected | Unchanged — same domain throughout   |
+
 
 The last row matters more than it looks. Because the public hostname never changes, **no URL ever moves**. There is no redirect map to maintain for migrated pages, no link equity to shepherd, no `Change of Address` in Search Console. `/pricing` is `/pricing` before and after; only the machine answering it changed.
 
@@ -93,7 +99,7 @@ Every request runs the same sequence. Both implementations follow it; the code i
 2. **Origin-hostname guard.** If the request arrived on an internal origin hostname (the new site's own subdomain, say) serve a `Disallow: /` robots and stamp `noindex`. Internal hostnames must never be crawled or indexed — that is how a migration ends up with two copies of every page in the index.
 3. **TLS floor** *(multi-origin only)*. Reject TLS < 1.2 with a 400, before any origin fetch.
 4. **Trailing-slash normalisation.** `301 /path/ → /path`, preserving host and query.
-5. **Synthesised `robots.txt`** *(optional)*. When two backends each serve their own, neither is correct — the proxy serves a combined one with the right `Sitemap:` line for the host actually being visited.
+5. **Synthesised** `robots.txt` *(optional)*. When two backends each serve their own, neither is correct — the proxy serves a combined one with the right `Sitemap:` line for the host actually being visited.
 6. **Redirect table.** Exact-path 301s, checked *before* routing, so a path can be redirected even when it lives on a backend that would otherwise answer it.
 7. **Routing.** Exact path → folder → default. See below.
 8. **Origin fetch.** Correct `Host` header, `X-Forwarded-*` set, `redirect: 'manual'` so redirects are ours to rewrite, plus any per-origin escape-hatch headers.
@@ -102,6 +108,8 @@ Every request runs the same sequence. Both implementations follow it; the code i
 11. **HTML rewriting** *(optional, per-origin)*. Replace absolute origin URLs in the body with the visitor's host.
 12. **Security headers** *(multi-origin only)*. CSP and friends stamped on *every* response, including synthesised ones and error paths.
 13. **Analytics** *(multi-origin only)*. Fire-and-forget page-view log of the response actually served.
+
+
 
 ## The routing table
 
@@ -139,13 +147,15 @@ Matching is case-insensitive, and exact paths always beat folder matches — so 
 
 **Day-to-day, the migration is this workflow:**
 
-| Situation | Action |
-|---|---|
-| A page is rebuilt and approved | Add its path to `EXACT_PATHS.new`, deploy |
-| A whole section is rebuilt | Add the segment to `PATHS.new`, deploy |
-| A migrated page is wrong | Delete the line, deploy — traffic is back on the old site in ~2 minutes |
-| Most of the site has moved | Flip `DEFAULT_ORIGIN` to `'new'`, list the stragglers under `old` |
-| The old platform is switched off | Delete the old origin entirely |
+
+| Situation                        | Action                                                                  |
+| -------------------------------- | ----------------------------------------------------------------------- |
+| A page is rebuilt and approved   | Add its path to `EXACT_PATHS.new`, deploy                               |
+| A whole section is rebuilt       | Add the segment to `PATHS.new`, deploy                                  |
+| A migrated page is wrong         | Delete the line, deploy — traffic is back on the old site in ~2 minutes |
+| Most of the site has moved       | Flip `DEFAULT_ORIGIN` to `'new'`, list the stragglers under `old`       |
+| The old platform is switched off | Delete the old origin entirely                                          |
+
 
 That last flip is the one-way door, and by the time you reach it every page on the list has already been serving live traffic for weeks.
 
@@ -181,24 +191,28 @@ That last flip is the one-way door, and by the time you reach it every page on t
         └── wrangler.jsonc        dev / staging / rehearsal / production
 ```
 
+
+
 ## The two implementations
 
 Both do the same core job. The second is what the first became after a migration's worth of lessons.
 
-| | `proxy-dual-origin` | `proxy-multi-origin` |
-|---|---|---|
-| **Origins** | Exactly 2, hardcoded as `webflow` / `hubspot` | N, defined by a TS union — add `'blog'` and the compiler lists every place that needs a value |
-| **Framework** | Hono | Plain `fetch` handler, no dependencies |
-| **Config** | Routing only | Routing + behaviour toggles + security policy |
-| **Security headers** | None (a separate worker did it) | **Absorbs** the site's existing CSP worker — one hop instead of two |
-| **TLS floor** | — | Rejects TLS < 1.2 at the edge |
-| **Analytics** | — | Absorbs the site's crawler-analytics worker, logging the response actually served |
-| **HTML rewriting** | Always on for one origin | Per-origin toggle (it costs a full body buffer) |
-| **`robots.txt`** | Hardcoded | Pluggable, or proxied through |
-| **Environments** | One, via Terraform | dev / staging / **rehearsal** / production |
-| **Deploy** | `terraform apply` from a committed bundle | Git-connected dashboard deploy, or `wrangler deploy` |
-| **Build traceability** | — | `X-RP-Build` = deployment version ID on every response |
-| **Infra as code** | ✅ Terraform: Worker, routes, DNS, redirect rules | Config-as-code only |
+
+|                        | `proxy-dual-origin`                              | `proxy-multi-origin`                                                                          |
+| ---------------------- | ------------------------------------------------ | --------------------------------------------------------------------------------------------- |
+| **Origins**            | Exactly 2, hardcoded as `webflow` / `hubspot`    | N, defined by a TS union — add `'blog'` and the compiler lists every place that needs a value |
+| **Framework**          | Hono                                             | Plain `fetch` handler, no dependencies                                                        |
+| **Config**             | Routing only                                     | Routing + behaviour toggles + security policy                                                 |
+| **Security headers**   | None (a separate worker did it)                  | **Absorbs** the site's existing CSP worker — one hop instead of two                           |
+| **TLS floor**          | —                                                | Rejects TLS < 1.2 at the edge                                                                 |
+| **Analytics**          | —                                                | Absorbs the site's crawler-analytics worker, logging the response actually served             |
+| **HTML rewriting**     | Always on for one origin                         | Per-origin toggle (it costs a full body buffer)                                               |
+| **`robots.txt`**       | Hardcoded                                        | Pluggable, or proxied through                                                                 |
+| **Environments**       | One, via Terraform                               | dev / staging / **rehearsal** / production                                                    |
+| **Deploy**             | `terraform apply` from a committed bundle        | Git-connected dashboard deploy, or `wrangler deploy`                                          |
+| **Build traceability** | —                                                | `X-RP-Build` = deployment version ID on every response                                        |
+| **Infra as code**      | ✅ Terraform: Worker, routes, DNS, redirect rules | Config-as-code only                                                                           |
+
 
 **Which to start from.** `proxy-multi-origin` is the better base for anything new — cleaner origin model, no framework dependency, and the environment ladder that makes the rollout rehearsable. Take `proxy-dual-origin`'s `terraform/` if the infrastructure itself needs to be code-reviewed and version-controlled, which on a client's production zone it usually should be.
 
@@ -286,11 +300,13 @@ Keep a written porting record of every deliberate deviation. That record is what
 
 Three headers, and they earn their keep during a cutover:
 
-| Header | Answers |
-|---|---|
-| `X-Origin` | Which backend served this? |
-| `X-RP-Build` | Which exact deployment served this? (version ID) |
-| `X-Rewrite` | Was HTML rewriting applied, and between which hosts? |
+
+| Header       | Answers                                              |
+| ------------ | ---------------------------------------------------- |
+| `X-Origin`   | Which backend served this?                           |
+| `X-RP-Build` | Which exact deployment served this? (version ID)     |
+| `X-Rewrite`  | Was HTML rewriting applied, and between which hosts? |
+
 
 `X-RP-Build` in particular resolves the two worst cutover questions instantly: if a response carries it but the wrong CSP, something *after* the proxy is overriding headers; if it is missing entirely, the request never reached the proxy at all.
 
@@ -324,12 +340,14 @@ Rollback at every phase is the same move: delete a line, or detach a route. Noth
 
 Each script is read-only — GET/HEAD requests and DNS lookups only — and writes full raw output to a timestamped folder under `.audit/` so runs are diffable against each other.
 
-| Script | Phase | Checks |
-|---|---|---|
-| `site-audit.sh` | 0 | DNS, NS, CAA, redirect chains, security headers, robots/sitemap, trailing-slash + case behaviour, TLS, platform fingerprints |
-| `rehearsal-verify.sh` | 1 | Routing per path, `noindex` coverage, CSP presence and byte-identity, enforcement proof via a deliberately blocked test embed |
-| `golive-verify.sh` | 3 | Every migrated path lands on the new origin, every unlisted path falls back, apex untouched, headers match baseline |
-| `ssl-check.sh` | any | Fresh TLS handshakes per edge IP (bypassing session resumption) to catch partial certificate rollouts |
+
+| Script                | Phase | Checks                                                                                                                        |
+| --------------------- | ----- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `site-audit.sh`       | 0     | DNS, NS, CAA, redirect chains, security headers, robots/sitemap, trailing-slash + case behaviour, TLS, platform fingerprints  |
+| `rehearsal-verify.sh` | 1     | Routing per path, `noindex` coverage, CSP presence and byte-identity, enforcement proof via a deliberately blocked test embed |
+| `golive-verify.sh`    | 3     | Every migrated path lands on the new origin, every unlisted path falls back, apex untouched, headers match baseline           |
+| `ssl-check.sh`        | any   | Fresh TLS handshakes per edge IP (bypassing session resumption) to catch partial certificate rollouts                         |
+
 
 `ssl-check.sh` exists because of a real incident: a certificate rolled out to some edge PoPs and not others. A single `curl` said everything was fine; visitors in one region disagreed. Probing each anycast IP individually is the only way to see it.
 
@@ -348,25 +366,29 @@ Nothing here depends on Cloudflare conceptually. The proxy needs four capabiliti
 3. Fetch that backend with a chosen `Host` header, without looping
 4. Modify response headers (and, if needed, the body)
 
+
+
 ### Azure
 
-| What the Worker does | Azure equivalent |
-|---|---|
-| Sits in front of the domain | **Azure Front Door** (Standard/Premium). Azure DNS is authoritative-only — it does not proxy — so Front Door is the layer that intercepts. |
-| Old site / new site backends | **Origin groups**, one per backend |
-| `EXACT_PATHS` / `PATHS` routing | **Rule Set** with request-path/host match conditions and an **origin-group override** action — the routing table, no code |
-| `REDIRECTS` map | Rule Set **URL redirect** action, or a Front Door route |
-| `Host` header to the origin | Origin's **origin host header** setting |
-| Trailing-slash 301 | Rule Set redirect action on a path condition |
-| Security headers / CSP | Rule Set **modify response header** actions |
-| `X-Robots-Tag` on internal hosts | Rule Set condition on hostname + response-header action |
-| TLS floor | Minimum TLS version on the custom domain |
-| Cache purge | Front Door purge by path or wildcard |
-| **HTML body rewriting** | ⚠️ Not available in Front Door rules — needs compute (below) |
-| **Synthesised `robots.txt`** | ⚠️ Same — needs compute |
-| **Analytics beacon** | ⚠️ Same — or handle downstream from Front Door access logs |
-| `X-Origin` / `X-RP-Build` | Rule Set response headers (static per rule) |
-| Terraform | Same provider model — `azurerm_cdn_frontdoor_*` resources |
+
+| What the Worker does             | Azure equivalent                                                                                                                           |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Sits in front of the domain      | **Azure Front Door** (Standard/Premium). Azure DNS is authoritative-only — it does not proxy — so Front Door is the layer that intercepts. |
+| Old site / new site backends     | **Origin groups**, one per backend                                                                                                         |
+| `EXACT_PATHS` / `PATHS` routing  | **Rule Set** with request-path/host match conditions and an **origin-group override** action — the routing table, no code                  |
+| `REDIRECTS` map                  | Rule Set **URL redirect** action, or a Front Door route                                                                                    |
+| `Host` header to the origin      | Origin's **origin host header** setting                                                                                                    |
+| Trailing-slash 301               | Rule Set redirect action on a path condition                                                                                               |
+| Security headers / CSP           | Rule Set **modify response header** actions                                                                                                |
+| `X-Robots-Tag` on internal hosts | Rule Set condition on hostname + response-header action                                                                                    |
+| TLS floor                        | Minimum TLS version on the custom domain                                                                                                   |
+| Cache purge                      | Front Door purge by path or wildcard                                                                                                       |
+| **HTML body rewriting**          | ⚠️ Not available in Front Door rules — needs compute (below)                                                                               |
+| **Synthesised** `robots.txt`     | ⚠️ Same — needs compute                                                                                                                    |
+| **Analytics beacon**             | ⚠️ Same — or handle downstream from Front Door access logs                                                                                 |
+| `X-Origin` / `X-RP-Build`        | Rule Set response headers (static per rule)                                                                                                |
+| Terraform                        | Same provider model — `azurerm_cdn_frontdoor_*` resources                                                                                  |
+
 
 **Two shapes, depending on how much you need:**
 
