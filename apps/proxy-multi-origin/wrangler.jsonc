@@ -1,0 +1,163 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────
+  // Cloudflare Worker config — single source of truth for the proxy setup.
+  //
+  // Deployment: the simplest path is connecting the repo to Cloudflare in the
+  // dashboard (Workers & Pages → import repository) so pushes deploy
+  // automatically. `wrangler deploy --env <name>` does the same thing from a
+  // terminal or CI job. No Terraform is required here — compare with
+  // apps/proxy-dual-origin, which manages the same kind of setup as code.
+  //
+  // Adding another origin (e.g. a separate blog platform)? Add its *_ORIGIN
+  // var to every environment below, run `pnpm types`, then follow the 3-step
+  // recipe at the top of src/config.ts.
+  // ───────────────────────────────────────────────────────────────────────────
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "proxy-multi-origin",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-12",
+  // ⚠️ Never add "global_fetch_strictly_public" here. The proxy relies on the
+  // default same-zone fetch behavior (subrequests go straight to the DNS
+  // origin, "ignoring any Workers mapped to the URL" — Cloudflare docs). That
+  // flag would make our own origin fetch re-enter Cloudflare and loop.
+  "compatibility_flags": ["nodejs_compat"],
+
+  // Never expose the raw workers.dev / preview URLs — traffic must only flow
+  // through the routes defined per environment below.
+  "workers_dev": false,
+  "preview_urls": false,
+
+  // Logs & traces in the Cloudflare dashboard (Workers → <worker> → Logs).
+  "observability": {
+    "enabled": true
+  },
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Environment variables (non-secret — origins are public hostnames).
+  //
+  //   ALLOWED_HOSTS    Comma-separated hostnames this Worker serves.
+  //                    First entry is the canonical/primary host.
+  //   OLD_SITE_ORIGIN  Full URL of the CURRENT live site (fallback origin).
+  //   NEW_SITE_ORIGIN  Full URL of the NEW site being built.
+  //   NOINDEX          "true" adds X-Robots-Tag: noindex to every response.
+  //                    Keep "true" on staging, "false" on production.
+  //
+  // NOTE: wrangler environments do NOT inherit top-level vars — each env
+  // defines the full set.
+  //
+  // Every hostname below is a placeholder (example.com / example.net).
+  // ───────────────────────────────────────────────────────────────────────────
+
+  // Top-level vars are used by `wrangler dev` (local development) only.
+  // Override locally via .dev.vars (copy .dev.vars.example).
+  "vars": {
+    "ALLOWED_HOSTS": "localhost",
+    "OLD_SITE_ORIGIN": "https://www.example.com",
+    "NEW_SITE_ORIGIN": "https://newsite.webflow.io",
+    "NOINDEX": "true"
+  },
+
+  "env": {
+    // ── STAGING ── validate the proxy on the real zone without touching the
+    // live site: same Worker, same code, a hostname nobody links to.
+    "staging": {
+      // Worker name says what it does: reverse proxy + absorbed security
+      // headers + integrated analytics logging.
+      "name": "reverse-proxy-csp-analytics",
+      // Pin the account ID so a deploy can never land on another account the
+      // deploying token happens to see.
+      "account_id": "REPLACE-WITH-CLOUDFLARE-ACCOUNT-ID",
+      "vars": {
+        "ALLOWED_HOSTS": "staging.example.com",
+        // The live site, fetched same-zone — which bypasses Worker routes and
+        // so cannot loop back into this Worker.
+        "OLD_SITE_ORIGIN": "https://www.example.com",
+        // The new project's own custom domain on the same zone. Verify it
+        // serves 200 directly, with no redirect, before pointing at it.
+        "NEW_SITE_ORIGIN": "https://webflow1.example.com",
+        "NOINDEX": "true"
+      },
+      // Exposes this deployment's Version ID to the code — stamped as the
+      // X-RP-Build response header so any response can be matched to the
+      // exact deployment in the dashboard (Workers → Deployments).
+      "version_metadata": { "binding": "CF_VERSION_METADATA" },
+      // Crawler analytics: the Worker sends the page-view log itself
+      // (src/analytics.ts) — no service binding, no re-fetch. Events only
+      // fire once the key is set as a secret (never in the repo):
+      //   pnpm exec wrangler secret put ANALYTICS_KEY --env staging
+      //
+      // A route is safe to declare before its DNS record exists — with no
+      // staging.example.com record the hostname doesn't resolve, so the route
+      // carries no traffic. Point that host at the new site the same way the
+      // primary host is pointed (Webflow O2O, proxied), which is exactly what
+      // staging is there to prove the Worker can sit on without looping.
+      "routes": [
+        { "pattern": "staging.example.com/*", "zone_name": "example.com" }
+      ]
+    },
+
+    // ── REHEARSAL ── the same topology on a zone you own, so the whole
+    // sequence can be rehearsed end to end before anything is asked of the
+    // site owner. Nothing on the real zone is touched or even aware.
+    //
+    // It mirrors staging exactly: the rehearsal hostname is attached to a
+    // throwaway Webflow site as an extra custom domain (O2O, proxied; the
+    // site's default domain stays default) with the Worker on its route. The
+    // old origin is the connected site's DEFAULT domain, fetched same-zone
+    // (bypasses Worker routes, lands straight on the host — no loop). Never
+    // the Worker's own host: non-default Webflow domains 301 to the default.
+    "rehearsal": {
+      "account_id": "REPLACE-WITH-CLOUDFLARE-ACCOUNT-ID",
+      "vars": {
+        "ALLOWED_HOSTS": "rehearsal.example.net",
+        // The rehearsal site's default domain. If the Webflow default is the
+        // apex, use https://example.net.
+        "OLD_SITE_ORIGIN": "https://www.example.net",
+        "NEW_SITE_ORIGIN": "https://newsite.webflow.io",
+        "NOINDEX": "true" // never indexable — it's a rehearsal on a public host
+      },
+      // Safe to declare up front: the route only carries traffic once the
+      // proxied DNS record for the rehearsal host exists.
+      "routes": [
+        { "pattern": "rehearsal.example.net/*", "zone_name": "example.net" }
+      ],
+      "version_metadata": { "binding": "CF_VERSION_METADATA" }
+    },
+
+    // ── PRODUCTION ── the real thing.
+    // Deploying is safe before launch: the Worker only intercepts traffic once
+    // the routes below are active AND the hostname is proxied (orange cloud).
+    "production": {
+      // Same naming convention as staging, distinct name — both Workers live
+      // on the same account, and an identical name would overwrite staging.
+      "name": "reverse-proxy-csp-analytics-production",
+      "account_id": "REPLACE-WITH-CLOUDFLARE-ACCOUNT-ID",
+      "vars": {
+        // The bare domain is deliberately excluded: it is never routed through
+        // this Worker, so the host platform keeps issuing its own apex → www
+        // 301 exactly as before. (Fail-safe: an unlisted host passes through
+        // untouched even if a route were ever added by mistake.)
+        "ALLOWED_HOSTS": "www.example.com", // canonical host
+        "OLD_SITE_ORIGIN": "https://www.example.com", // see README → "Fetching the origin without looping"
+        "NEW_SITE_ORIGIN": "https://webflow1.example.com",
+        "NOINDEX": "false"
+      },
+      "version_metadata": { "binding": "CF_VERSION_METADATA" }
+      // ⚠️ Route handling at cutover: if the primary route ("www.example.com/*")
+      // is already assigned to another Worker (e.g. an existing standalone CSP
+      // worker), do NOT declare it here yet. Swap that route's Worker
+      // assignment in the dashboard first — an in-place edit, atomic and
+      // reversible — then uncomment it here so future deploys keep it.
+      // Never add an apex route: the apex keeps its own platform-issued
+      // redirect. The new-site origin host gets its own route at the phase
+      // where it starts serving traffic.
+      // "routes": [
+      //   { "pattern": "www.example.com/*", "zone_name": "example.com" },
+      //   { "pattern": "webflow1.example.com/*", "zone_name": "example.com" }
+      // ]
+      // Crawler analytics at launch: same integrated logging as staging
+      // (src/analytics.ts). Set the production key before the route swap:
+      //   pnpm exec wrangler secret put ANALYTICS_KEY --env production
+    }
+  }
+}

@@ -1,0 +1,7 @@
+# Local Wrangler overrides — copy to .dev.vars and fill in real values.
+# These override the vars in wrangler.jsonc during `pnpm dev`.
+
+ALLOWED_HOSTS=www.example.com,example.com,www.example.net,example.net
+WEBFLOW_SUBDOMAIN=webflow1
+WEBFLOW_ORIGIN=https://webflow1.example.com
+HUBSPOT_ORIGIN=https://hs.example.com

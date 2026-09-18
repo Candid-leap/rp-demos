@@ -1,0 +1,11 @@
+# Local Wrangler overrides — copy to .dev.vars and fill in real values.
+# These override the top-level "vars" in wrangler.jsonc during `pnpm dev`.
+
+ALLOWED_HOSTS=localhost
+OLD_SITE_ORIGIN=https://www.example.com
+NEW_SITE_ORIGIN=https://REPLACE-ME.webflow.io
+NOINDEX=true
+
+# Crawler-analytics key (a secret in deployed environments — never in the
+# repo). Leave unset locally: without it no analytics events are sent.
+# ANALYTICS_KEY=

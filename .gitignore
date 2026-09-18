@@ -1,0 +1,37 @@
+# Dependencies & build output
+node_modules/
+dist/
+.wrangler/
+
+# Generated Worker types (recreated by `pnpm types` / on install)
+worker-configuration.d.ts
+
+# Verification-script output (raw headers, DNS dumps, audit logs)
+.audit/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfvars
+!*.tfvars.example
+.terraform.lock.hcl
+
+# Local secrets / overrides
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+.env
+.env.*
+!.env.example
+
+# content-migration working data (real content never belongs in git)
+tools/content-migration/workspace/**
+!tools/content-migration/workspace/**/.gitkeep
+tools/content-migration/rules.json
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store

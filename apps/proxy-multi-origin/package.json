@@ -1,0 +1,25 @@
+{
+  "name": "proxy-multi-origin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cloudflare Worker reverse proxy: N origins, absorbed security headers and analytics, multi-environment.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "check": "tsc --noEmit",
+    "types": "wrangler types",
+    "postinstall": "wrangler types",
+    "build": "bash scripts/build.sh",
+    "deploy:staging": "wrangler deploy --env staging",
+    "deploy:production": "wrangler deploy --env production",
+    "tail:staging": "wrangler tail --env staging",
+    "tail:production": "wrangler tail --env production"
+  },
+  "devDependencies": {
+    "prettier": "^3.4.0",
+    "typescript": "^5.7.0",
+    "wrangler": "^4.0.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild", "workerd"]
+  }
+}

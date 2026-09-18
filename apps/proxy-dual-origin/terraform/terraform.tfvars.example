@@ -1,0 +1,14 @@
+# Copy this file to terraform.tfvars and fill in the 3 secrets.
+# terraform.tfvars is gitignored — never commit it.
+
+# ─── Secrets ─────────────────────────────────────────────────────────────────
+# See README for how to create the API token and find the IDs.
+cloudflare_api_token  = ""
+cloudflare_account_id = ""
+cloudflare_zone_id    = ""
+
+# ─── Configuration ───────────────────────────────────────────────────────────
+domain              = "www.example.com"
+webflow_origin      = "https://webflow1.example.com"
+hubspot_origin      = "https://www.example.com"
+worker_name         = "proxy-dual-origin"
